@@ -1,10 +1,46 @@
 #!/usr/bin/env bash
 
 # no. this works as expected
-#olddir_depth=0; newdir_depth=$olddir_depth
+# only change the basename
+olddir_depth=0; newdir_depth=$olddir_depth; change_basename=true
+
+# no. this works as expected
+# change 1 dirname
+olddir_depth=1; newdir_depth=$olddir_depth; change_basename=false
+
+# no. this works as expected
+# move the file 1 level down. note: one depth must be 0
+olddir_depth=0; newdir_depth=1; change_basename=false
 
 # yes. this fails to dedupe "git mv"
-olddir_depth=1; newdir_depth=$olddir_depth
+# move the file 1 level up. note: one depth must be 0
+olddir_depth=1; newdir_depth=0; change_basename=false
+
+# yes. this fails to dedupe "git mv"
+# change 2 dirnames
+olddir_depth=2; newdir_depth=$olddir_depth; change_basename=false
+
+# yes. this fails to dedupe "git mv"
+# change 1 dirname and basename
+olddir_depth=1; newdir_depth=$olddir_depth; change_basename=true
+
+
+
+# no effect
+const_path_prefix=
+#const_path_prefix=a/b/c/
+
+
+
+# no effect. same problem with copy
+move_or_copy=move
+#move_or_copy=copy
+
+
+
+use_text_files=false
+#use_text_files=true # TODO base64
+
 
 
 
@@ -17,6 +53,7 @@ echo "todo? create new repo \"$repo\" at https://github.com/new"
 
 # no effect
 num_files=1; file_size_mega=1
+num_files=1; file_size_mega=10 # make the blob transfer more noticable
 
 transfer_size_mega=$((num_files * file_size_mega))
 
@@ -34,6 +71,9 @@ disable_delta_compression=false
 continue_move_files=false
 # continue an interrupted run after the first "git push"
 #continue_move_files=true
+
+stop_git_push=false
+#stop_git_push=true # avoid large transfers
 
 set -e
 set -x
@@ -71,9 +111,9 @@ git commit -m "add readme.txt"
 
 # disable delta compression
 if $disable_delta_compression; then
-echo "*$file_extension -delta" >.gitattributes
-git add .gitattributes
-git commit -m "add .gitattributes"
+  echo "*$file_extension -delta" >.gitattributes
+  git add .gitattributes
+  git commit -m "add .gitattributes"
 fi
 
 while true; do # retry loop
@@ -86,9 +126,15 @@ done
 # create files
 for ((file_id=0; file_id<num_files; file_id++)); do
   olddir=$(get_dir olddir-$file_id $olddir_depth)
-  [ -n "$olddir" ] && mkdir -p $olddir
-  oldpath=${olddir}oldname-$file_id$file_extension
-  head -c$file_size /dev/urandom >$oldpath
+  oldname=oldname-$file_id$file_extension
+  oldpath=$const_path_prefix$olddir$oldname
+  mkdir -p $(dirname $oldpath)
+  # FIXME mkdir
+  if $use_text_files; then
+    cat /dev/urandom | base64 | head -c$file_size >$oldpath
+  else
+    cat /dev/urandom | head -c$file_size >$oldpath
+  fi
   git add $oldpath
 done
 git commit -m "add oldname*"
@@ -102,22 +148,53 @@ done
 
 fi # end of: if ! $continue_move_files
 
+const_path_prefix_depth=$(echo "$const_path_prefix" | tr -c -d / | wc -c)
+
 # move files
-# 2 = commit object + root tree object
-expected_num_transfer_objects=2
-wrong_num_transfer_objects=2
+# FIXME expected_num_transfer_trees is wrong in some cases
+expected_num_transfer_trees=0
+wrong_num_transfer_trees=0
 for ((file_id=0; file_id<num_files; file_id++)); do
   olddir=$(get_dir olddir-$file_id $olddir_depth)
-  oldpath=${olddir}oldname-$file_id$file_extension
+  oldname=oldname-$file_id$file_extension
+  oldpath=$const_path_prefix$olddir$oldname
   newdir=$(get_dir newdir-$file_id $newdir_depth)
-  expected_num_transfer_objects=$((expected_num_transfer_objects + newdir_depth))
-  # +1 for the extra blob object
-  wrong_num_transfer_objects=$((wrong_num_transfer_objects + newdir_depth + 1))
-  newpath=${newdir}newname-$file_id$file_extension
-  [ -n "$newdir" ] && mkdir -p $newdir
-  git mv $oldpath $newpath
+  if $change_basename; then
+    newname=newname-$file_id$file_extension
+    expected_num_transfer_trees=$((expected_num_transfer_trees + const_path_prefix_depth + newdir_depth))
+    # +1 for the extra blob object
+    wrong_num_transfer_trees=$((wrong_num_transfer_trees + const_path_prefix_depth + newdir_depth + 1))
+  else
+    newname=$oldname
+    # -1 because the last tree stays constant
+    expected_num_transfer_trees=$((expected_num_transfer_trees + const_path_prefix_depth + newdir_depth - 1))
+    # +1 for the extra blob object
+    wrong_num_transfer_trees=$((wrong_num_transfer_trees + const_path_prefix_depth + newdir_depth + 1 - 1))
+  fi
+  newpath=$const_path_prefix$newdir$newname
+  mkdir -p $(dirname $newpath)
+  case "$move_or_copy" in
+    move)
+      git mv $oldpath $newpath
+      ;;
+    copy)
+      cp $oldpath $newpath
+      git add $newpath
+      ;;
+  esac
 done
-git commit -m "mv oldname* newname*"
+# +1 for the root tree object
+# +1 for the commit object
+expected_num_transfer_objects=$((expected_num_transfer_trees + 2))
+wrong_num_transfer_objects=$((wrong_num_transfer_trees + 2))
+case "$move_or_copy" in
+  move)
+    git commit -m "mv oldname* newname*"
+    ;;
+  copy)
+    git commit -m "cp oldname* newname*"
+    ;;
+esac
 echo "expected: push about 1 KByte"
 echo "expected_num_transfer_objects: $expected_num_transfer_objects"
 echo "wrong_num_transfer_objects: $wrong_num_transfer_objects"
@@ -140,7 +217,9 @@ while read -r -d$'\r' line; do
     echo "# fail: $num_transfer_objects != $expected_num_transfer_objects"
   fi
   found_transfer=true
-  echo "stopping git push"; break
+  if $stop_git_push; then
+    echo "stopping git push"; break
+  fi
 done < <(
   while true; do # retry loop
     unbuffer git push origin -u main 2>&1 && break
