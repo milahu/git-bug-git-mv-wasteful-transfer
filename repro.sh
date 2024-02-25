@@ -145,5 +145,5 @@ git commit -m "mv oldname* newname*"
 echo "expected: push about 1 KByte"
 # Writing objects: 100% (2/2), 388 bytes | 388.00 KiB/s, done.
 # this should take a few seconds to upload 1KB
-timeout 30 \
+timeout 120 \
 git push origin -u main
