@@ -67,11 +67,6 @@ file_extension=.bin
 disable_delta_compression=false
 #disable_delta_compression=true
 
-# debug
-continue_move_files=false
-# continue an interrupted run after the first "git push"
-#continue_move_files=true
-
 stop_git_push=false
 #stop_git_push=true # avoid large transfers
 
@@ -93,14 +88,10 @@ function get_dir() {
   echo $dir
 }
 
-if ! $continue_move_files; then
 # mkdir fails if dir exists
 mkdir $repo
-fi
 
 cd $repo
-
-if ! $continue_move_files; then
 
 git init
 git remote add origin $remote
@@ -145,8 +136,6 @@ while true; do # retry loop
   echo "git push failed -> retrying"
   sleep 10
 done
-
-fi # end of: if ! $continue_move_files
 
 const_path_prefix_depth=$(echo "$const_path_prefix" | tr -c -d / | wc -c)
 
