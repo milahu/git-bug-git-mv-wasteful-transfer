@@ -44,8 +44,29 @@ cat >/dev/null <<'EOF'
   Total 42 (delta 0), reused 0 (delta 0), pack-reused 0
 EOF
 
+# yes. this fails to dedupe "git mv"
+#num_files=50; file_size_mega=20
+cat >/dev/null <<'EOF'
+  expected: push 1000 MByte
+  + git push origin -u main
+  Enumerating objects: 203, done.
+  Counting objects: 100% (203/203), done.
+  Delta compression using up to 4 threads
+  Compressing objects: 100% (2/2), done.
+  Writing objects: 100% (202/202), 1000.09 MiB | 770.00 KiB/s, done.
+  Total 202 (delta 0), reused 0 (delta 0), pack-reused 0
+
+  expected: push about 1 KByte
+  + git push origin -u main
+  Enumerating objects: 203, done.
+  Counting objects: 100% (203/203), done.
+  Delta compression using up to 4 threads
+  Compressing objects: 100% (2/2), done.
+  Writing objects:   2% (5/202), 17.02 MiB | 891.00 KiB/s
+EOF
+
 # work in progress ...
-num_files=50; file_size_mega=20
+num_files=10; file_size_mega=50
 
 # TODO find the limit of git or github
 # when does it start failing to dedupe the blob objects?
@@ -123,4 +144,6 @@ done
 git commit -m "mv oldname* newname*"
 echo "expected: push about 1 KByte"
 # Writing objects: 100% (2/2), 388 bytes | 388.00 KiB/s, done.
+# this should take a few seconds to upload 1KB
+timeout 30 \
 git push origin -u main
